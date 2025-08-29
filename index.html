@@ -153,7 +153,14 @@
 
 <script>
   // --- Mermaid init ---
-  mermaid.initialize({ startOnLoad: true, securityLevel: 'loose', theme: 'dark' });
+  // Wrap Mermaid initialization in try/catch so that a failure to load the library
+  // does not break the rest of the application. We disable automatic startOnLoad
+  // because we manually invoke mermaid.run() when diagrams are rendered.
+  try {
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'dark' });
+  } catch (e) {
+    console.warn('Mermaid initialization failed', e);
+  }
 
   // --- State ---
   let state = {
@@ -163,6 +170,20 @@
   };
 
   const el = (id)=>document.getElementById(id);
+
+  // Global error handler: display script errors on the page for easier debugging
+  window.addEventListener('error', (evt) => {
+    try {
+      const container = document.getElementById('fileInfo') || document.body;
+      const msg = document.createElement('p');
+      msg.style.color = 'var(--bad)';
+      msg.style.fontSize = '12px';
+      msg.textContent = 'Error: '+evt.message+' ('+(evt.filename||'')+':'+evt.lineno+':'+evt.colno+')';
+      container.appendChild(msg);
+    } catch (err) {
+      // ignore
+    }
+  });
 
   // --- Drag & Drop ---
   const drop = el('drop');
@@ -575,32 +596,43 @@
 
   function exportHtml(){
     const m = state.model; if (!m) return;
-    const name = (state.fileName||'process').replace(/\.[^.]+$/,'');
+    const name = (state.fileName || 'process').replace(/\.[^.]+$/,'');
     const flow = mermaidFlowFromModel(m);
     const seq  = mermaidSequenceFromModel(m);
-    const html = `<!doctype html><html><head><meta charset=\\"utf-8\\"><title>${esc(name)} – Documentation</title>`+
-      `<script src=\\"https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js\\"></script>`+
-      `<style>body{font-family:ui-sans-serif,system-ui;max-width:900px;margin:20px auto;padding:0 16px;} pre{background:#f7f7f9;padding:12px;border-radius:8px;overflow:auto}</style>`+
-      `</head><body>`+
-      `<h1>${esc(name)} – BusinessWorks Documentation</h1>`+
-      `<p><b>Generated:</b> ${new Date().toLocaleString()}</p>`+
-      `<h2>Summary</h2>`+
-      `<ul>`+
-      `<li>Processes: ${m.processes.length}</li>`+
-      `<li>Activities: ${m.activities.length}</li>`+
-      `<li>Transitions: ${m.transitions.length}</li>`+
-      `<li>Interfaces: ${m.interfaces.length}</li>`+
-      `<li>Variables: ${m.variables.length}</li>`+
-      `<li>Faults: ${m.faults.length}</li>`+
-      `</ul>`+
-      `<h2>Flowchart</h2><div class=\\"mermaid\\">${flow.replaceAll('<','&lt;')}</div>`+
-      `<h2>Sequence</h2><div class=\\"mermaid\\">${seq.replaceAll('<','&lt;')}</div>`+
-      `<h2>Activities (by type)</h2>`+
-      groupBy(m.activities,a=>a.type).map(([type, items])=>`<h3>${esc(type)}</h3><ul>`+ items.map(it=>`<li><b>${esc(it.name)}</b> — id: ${esc(it.id)} — process: ${esc(it.parentProcess||'Main')}</li>`).join('')+`</ul>`).join('')+
-      `<script>mermaid.initialize({startOnLoad:true});</script>`+
-      `</body></html>`;
-
-    const blob = new Blob([html], {type:'text/html;charset=utf-8'});
+    const parts = [];
+    // Document head with title and external scripts
+    parts.push('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(name)+' – Documentation</title>');
+    // Embed external Mermaid script. Break up the word "script" so the containing
+    // HTML parser does not terminate this parent <script> prematurely.
+    parts.push('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></scr'+'ipt>');
+    parts.push('<style>body{font-family:ui-sans-serif,system-ui;max-width:900px;margin:20px auto;padding:0 16px;} pre{background:#f7f7f9;padding:12px;border-radius:8px;overflow:auto}</style>');
+    parts.push('</head><body>');
+    // Summary header
+    parts.push('<h1>'+esc(name)+' – BusinessWorks Documentation</h1>');
+    parts.push('<p><b>Generated:</b> '+new Date().toLocaleString()+'</p>');
+    parts.push('<h2>Summary</h2>');
+    parts.push('<ul>');
+    parts.push('<li>Processes: '+m.processes.length+'</li>');
+    parts.push('<li>Activities: '+m.activities.length+'</li>');
+    parts.push('<li>Transitions: '+m.transitions.length+'</li>');
+    parts.push('<li>Interfaces: '+m.interfaces.length+'</li>');
+    parts.push('<li>Variables: '+m.variables.length+'</li>');
+    parts.push('<li>Faults: '+m.faults.length+'</li>');
+    parts.push('</ul>');
+    // Flowchart and sequence diagrams
+    parts.push('<h2>Flowchart</h2><div class="mermaid">'+flow.replaceAll('<','&lt;')+'</div>');
+    parts.push('<h2>Sequence</h2><div class="mermaid">'+seq.replaceAll('<','&lt;')+'</div>');
+    // Activities grouped by type
+    parts.push('<h2>Activities (by type)</h2>');
+    parts.push(groupBy(m.activities, a=>a.type).map(([type, items]) => {
+      return '<h3>'+esc(type)+'</h3><ul>' + items.map(it => '<li><b>'+esc(it.name)+'</b> — id: '+esc(it.id)+' — process: '+esc(it.parentProcess || 'Main')+'</li>').join('') + '</ul>';
+    }).join(''));
+    // Initialize Mermaid in exported document
+    // Initialize Mermaid in the exported document. Use broken-up tags to avoid ending the parent script.
+    parts.push('<scr'+'ipt>mermaid.initialize({startOnLoad:true});</scr'+'ipt>');
+    parts.push('</body></html>');
+    const html = parts.join('');
+    const blob = new Blob([html], { type:'text/html;charset=utf-8' });
     saveAs(blob, `${name}_documentation.html`);
   }
 
