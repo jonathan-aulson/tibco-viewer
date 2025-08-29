@@ -1,29 +1,547 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>TIBCO Process Viewer</title>
-  <link rel="stylesheet" href="style.css"/>
-  <script src="assets/mermaid.min.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TIBCO .bwp Analyzer (Client‑side)</title>
+  <meta name="description" content="Upload a TIBCO BusinessWorks .bwp file to visualize workflows, list activities/interfaces, and export human‑readable documentation." />
+  <style>
+    :root { --bg: #0b1020; --panel:#121933; --ink:#e7ecff; --muted:#9fb0ff; --accent:#7aa2ff; --good:#40d19a; --warn:#ffd166; --bad:#ff6b6b; }
+    html,body{height:100%;}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family: ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,"Helvetica Neue",Arial,"Apple Color Emoji","Segoe UI Emoji";}
+    .wrap{max-width:1200px;margin:0 auto;padding:24px;}
+    h1{font-weight:800;letter-spacing:.2px;margin:.2em 0 .2em;font-size:clamp(24px,3vw,34px);}    
+    .sub{color:var(--muted);margin-top:0}
+    .panel{background:linear-gradient(180deg, #101736 0%, #0f1530 100%);border:1px solid #1f2a55;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.35);}
+    .row{display:flex;gap:16px;flex-wrap:wrap}
+    .col{flex:1 1 380px}
+    .hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #1f2a55}
+    .hdr h2{font-size:16px;margin:0;color:#cfe0ff;text-transform:uppercase;letter-spacing:.12em}
+    .body{padding:16px}
+    .muted{color:#8aa0ff}
+    .fine{font-size:12px;color:#90a3ff}
+    .chip{display:inline-flex;gap:6px;align-items:center;background:#1a2250;border:1px solid #243073;padding:6px 10px;border-radius:999px;font-size:12px;color:#cfe0ff}
+    .btns{display:flex;gap:10px;flex-wrap:wrap}
+    button,.btn{background:#26357a;color:#fff;border:1px solid #3850c3;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+    button:hover,.btn:hover{filter:brightness(1.1)}
+    .primary{background:linear-gradient(180deg,#3b6cff,#2c57e0);border-color:#3b6cff}
+    .danger{background:#722b2b;border-color:#b44444}
+    input[type="file"]{display:none}
+    label.file{display:inline-flex;gap:8px;align-items:center;background:#1a2250;border:1px dashed #3850c3;color:#cfe0ff;padding:14px 16px;border-radius:12px;cursor:pointer}
+    #drop{border:2px dashed #3850c3;border-radius:14px;padding:24px;text-align:center;color:#cfe0ff;background:rgba(56,80,195,.08)}
+    #drop.drag{background:rgba(122,162,255,.15);border-color:#7aa2ff}
+    code.inline{background:#0c1330;border:1px solid #243073;border-radius:6px;padding:2px 6px}
+    pre{background:#0c1330;border:1px solid #243073;border-radius:10px;padding:12px;overflow:auto;color:#eaf1ff}
+    details{background:#0e1433;border:1px solid #243073;border-radius:12px;padding:10px 12px}
+    details>summary{cursor:pointer;color:#cfe0ff}
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    th,td{padding:8px 10px;border-bottom:1px solid #1f2a55;text-align:left}
+    th{color:#cfe0ff}
+    .tag{font-size:11px;background:#253164;color:#cfe0ff;padding:2px 6px;border-radius:6px;border:1px solid #3a4ba0}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+    .stat{background:#0e1538;border:1px solid #28367a;border-radius:12px;padding:12px}
+    .stat h3{margin:0 0 6px 0;font-size:13px;color:#9fb0ff;text-transform:uppercase;letter-spacing:.08em}
+    .stat .v{font-weight:800;font-size:22px}
+    .hidden{display:none}
+    .mermaid{background:#0c1330;border:1px solid #27367a;border-radius:10px;padding:12px}
+    footer{margin:36px 0;color:#8aa0ff}
+    .mono{font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+  </style>
+  <!-- Mermaid -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <!-- JSZip + FileSaver for zip handling and downloads -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
 </head>
 <body>
-  <h1>TIBCO Process Viewer</h1>
-  
-  <input type="file" id="fileInput" multiple accept=".process"/>
-  <div id="fileList"></div>
+  <div class="wrap">
+    <h1>TIBCO <span style="color:var(--accent)">.bwp</span> Analyzer</h1>
+    <p class="sub">Upload a TIBCO BusinessWorks <code class="inline">.bwp</code> file. This app parses it client‑side to produce a human‑readable summary, Mermaid diagrams (flowchart/sequence), and exportable documentation (Markdown/HTML). All processing stays in your browser.</p>
 
-  <div id="output">
-    <h2>Process Graph</h2>
-    <pre class="mermaid" id="mermaidGraph"></pre>
+    <div class="row">
+      <div class="col">
+        <div class="panel">
+          <div class="hdr"><h2>1) Upload .bwp</h2><span class="fine">Drag & drop or choose a file</span></div>
+          <div class="body">
+            <div id="drop">
+              <p>Drop your <b>.bwp</b> here</p>
+              <p class="fine">or</p>
+              <label class="file"><input id="file" type="file" accept=".bwp,.xml,.zip"/>Choose file</label>
+            </div>
+            <div id="fileInfo" class="fine" style="margin-top:10px"></div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="panel">
+          <div class="hdr"><h2>2) Quick Stats</h2><span class="fine">Parsed elements</span></div>
+          <div class="body">
+            <div class="grid">
+              <div class="stat"><h3>Processes</h3><div class="v" id="sProcesses">0</div></div>
+              <div class="stat"><h3>Activities</h3><div class="v" id="sActivities">0</div></div>
+              <div class="stat"><h3>Transitions</h3><div class="v" id="sTransitions">0</div></div>
+              <div class="stat"><h3>Bindings/Interfaces</h3><div class="v" id="sInterfaces">0</div></div>
+              <div class="stat"><h3>Variables</h3><div class="v" id="sVars">0</div></div>
+              <div class="stat"><h3>Fault/Handlers</h3><div class="v" id="sFaults">0</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
-    <h2>YAML Output</h2>
-    <pre id="yamlOutput"></pre>
+    <div class="panel" style="margin-top:16px">
+      <div class="hdr"><h2>3) Workflow Diagram (Mermaid)</h2>
+        <div class="btns">
+          <button id="btnFlow" class="primary">Build Flowchart</button>
+          <button id="btnSeq">Build Sequence</button>
+        </div>
+      </div>
+      <div class="body">
+        <div id="mermaid" class="mermaid">graph TD; A[Upload .bwp]-->B{Parse}; B-->C[Summarize]; C-->D[Export Docs];</div>
+        <details style="margin-top:10px">
+          <summary>Show Mermaid source</summary>
+          <pre id="mermaidSrc" class="mono"></pre>
+        </details>
+      </div>
+    </div>
 
-    <h2>Markdown Description</h2>
-    <pre id="markdownOutput"></pre>
+    <div class="row" style="margin-top:16px">
+      <div class="col">
+        <div class="panel">
+          <div class="hdr"><h2>4) Process Summary</h2>
+            <div class="btns">
+              <button id="btnExportMD">Export Markdown</button>
+              <button id="btnExportHTML">Export HTML</button>
+            </div>
+          </div>
+          <div class="body" id="summary"></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="panel">
+          <div class="hdr"><h2>Activities & Transitions</h2><span class="fine">Grouped by type with links</span></div>
+          <div class="body">
+            <div id="activities"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <div class="fine">Notes:
+        <ul>
+          <li>This viewer is schema‑tolerant: it tries to parse common BusinessWorks process structures from <code>.bwp</code> (XML) or zipped project bundles and gracefully lists unknown tags/attributes.</li>
+          <li>Mermaid diagrams are heuristically generated from activities and transitions. Review and tweak the exported Mermaid code as needed.</li>
+          <li>Everything runs client‑side; no data leaves your machine.</li>
+        </ul>
+      </div>
+    </footer>
   </div>
 
-  <script src="app.js"></script>
+<script>
+  // --- Mermaid init ---
+  mermaid.initialize({ startOnLoad: true, securityLevel: 'loose', theme: 'dark' });
+
+  // --- State ---
+  let state = {
+    xmlDoc: null,
+    model: null, // normalized in-memory representation
+    fileName: null,
+  };
+
+  const el = (id)=>document.getElementById(id);
+
+  // --- Drag & Drop ---
+  const drop = el('drop');
+  const fileInput = el('file');
+
+  ['dragenter','dragover'].forEach(evt=>drop.addEventListener(evt,e=>{e.preventDefault();drop.classList.add('drag');}));
+  ;['dragleave','drop'].forEach(evt=>drop.addEventListener(evt,e=>{e.preventDefault();drop.classList.remove('drag');}));
+  drop.addEventListener('drop', e=>{
+    const f = e.dataTransfer.files?.[0];
+    if (f) handleFile(f);
+  });
+  fileInput.addEventListener('change', e=>{
+    const f = e.target.files?.[0];
+    if (f) handleFile(f);
+  });
+
+  // --- File handling (XML or ZIP) ---
+  async function handleFile(file){
+    state.fileName = file.name;
+    el('fileInfo').textContent = `Selected: ${file.name} (${Math.round(file.size/1024)} KB)`;
+    const buf = await file.arrayBuffer();
+
+    // Try ZIP first if magic header present
+    const isZip = new Uint8Array(buf,0,4).every((b,i)=>[0x50,0x4b,0x03,0x04][i]===b);
+    if (isZip) {
+      try { await parseZip(buf); return; } catch (e){ console.warn('ZIP parse failed, fallback to XML', e); }
+    }
+    // Fallback: assume plain XML
+    await parseXmlText(new TextDecoder().decode(buf));
+  }
+
+  async function parseZip(arrayBuffer){
+    const zip = await JSZip.loadAsync(arrayBuffer);
+    // Heuristics: prefer single .bwp/.xml that looks like a process definition
+    let candidate = null;
+    zip.forEach((path, file)=>{
+      const lower = path.toLowerCase();
+      if ((lower.endsWith('.bwp') || lower.endsWith('.xml')) && !path.toLowerCase().includes('schema')) {
+        if (!candidate || path.length < candidate.length) candidate = path; // prefer shallow path
+      }
+    });
+    if (!candidate) throw new Error('No .bwp/.xml found inside ZIP');
+    const xmlText = await zip.file(candidate).async('string');
+    await parseXmlText(xmlText);
+  }
+
+  async function parseXmlText(xmlText){
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlText, 'text/xml');
+    // Basic error detection
+    if (doc.getElementsByTagName('parsererror').length){
+      el('summary').innerHTML = `<p class="fine" style="color:var(--bad)">XML parse error. This file doesn't look like valid XML.</p>`;
+      throw new Error('XML parse error');
+    }
+    state.xmlDoc = doc;
+    state.model = normalizeModel(doc);
+    renderAll();
+  }
+
+  // --- Normalization: build a minimal, schema‑tolerant model ---
+  function normalizeModel(doc){
+    // Try common BW namespaces / tags but do not rely on specific ns prefixes.
+    // Strategy: pull generic things by localName.
+    const byTag = (name)=>Array.from(doc.getElementsByTagName('*')).filter(n=>n.localName===name);
+    const text = (node, sel)=> node?.getAttribute?.(sel) || node?.textContent || '';
+
+    // Processes
+    const processes = byTag('process').map(p=>({
+      id: p.getAttribute('name') || p.getAttribute('id') || p.getAttribute('label') || uuid('proc'),
+      name: p.getAttribute('name') || p.getAttribute('label') || 'Process',
+      raw: p
+    }));
+
+    // Activities (very broad: any element with attribute 'type' or ending in 'Activity')
+    const allElems = Array.from(doc.getElementsByTagName('*'));
+    const activities = allElems.filter(n=>{
+      const ln = n.localName || n.tagName;
+      const hasType = n.hasAttribute && (n.hasAttribute('type') || n.hasAttribute('activityType'));
+      return /activity$/i.test(ln) || hasType;
+    }).map(a=>({
+      id: a.getAttribute('name') || a.getAttribute('id') || uuid('act'),
+      name: a.getAttribute('name') || a.getAttribute('label') || a.localName,
+      type: a.getAttribute('type') || a.getAttribute('activityType') || a.localName,
+      parentProcess: findAncestor(a,'process')?.getAttribute('name') || null,
+      inBindings: Array.from(a.children).filter(c=>/input|inbinding|config/i.test(c.localName)).map(c=>serializeAttrs(c)),
+      outBindings: Array.from(a.children).filter(c=>/output|outbinding|result/i.test(c.localName)).map(c=>serializeAttrs(c)),
+      raw: a
+    }));
+
+    // Transitions (edges) — look for elements with source/target refs or names like transition/edge/link
+    const transitions = allElems.filter(n=>/transition|edge|link/i.test(n.localName) || (n.hasAttribute?.('from') && n.hasAttribute?.('to'))).map(t=>({
+      id: t.getAttribute('name') || t.getAttribute('id') || uuid('tr'),
+      from: t.getAttribute('from') || t.getAttribute('source') || t.getAttribute('start') || t.getAttribute('fromActivity') || '',
+      to: t.getAttribute('to') || t.getAttribute('target') || t.getAttribute('end') || t.getAttribute('toActivity') || '',
+      condition: t.getAttribute('condition') || t.getAttribute('expr') || '',
+      parentProcess: findAncestor(t,'process')?.getAttribute('name') || null,
+      raw: t
+    }));
+
+    // Interfaces (partners/bindings) — very heuristic
+    const interfaces = byApproxNames(doc,['interface','partner','binding','endpoint','operation']).map(n=>({
+      name: n.getAttribute('name') || n.localName,
+      type: n.getAttribute('type') || n.localName,
+      attrs: serializeAttrs(n)
+    }));
+
+    const variables = byApproxNames(doc,['variable','param','property','global','shared']).map(n=>({
+      name: n.getAttribute('name') || n.localName,
+      scope: findAncestor(n,'process')? 'process':'global',
+      attrs: serializeAttrs(n)
+    }));
+
+    const faults = byApproxNames(doc,['fault','catch','handler','onError']).map(n=>({
+      name: n.getAttribute('name') || n.localName,
+      kind: n.localName,
+      attrs: serializeAttrs(n)
+    }));
+
+    return { processes, activities, transitions, interfaces, variables, faults };
+
+    function findAncestor(node, local){
+      let p = node.parentElement; while(p){ if((p.localName||'').toLowerCase()===local) return p; p=p.parentElement; } return null;
+    }
+    function serializeAttrs(node){
+      const o={}; if (!node?.attributes) return o; for(const a of node.attributes){ o[a.name]=a.value; } return o;
+    }
+    function byApproxNames(doc, names){
+      const set = new Set(names.map(n=>n.toLowerCase()));
+      return Array.from(doc.getElementsByTagName('*')).filter(n=> set.has((n.localName||'').toLowerCase()));
+    }
+  }
+
+  function uuid(prefix){ return `${prefix}_${Math.random().toString(36).slice(2,9)}`; }
+
+  // --- Rendering ---
+  function renderAll(){
+    const m = state.model;
+    // Stats
+    el('sProcesses').textContent = m.processes.length;
+    el('sActivities').textContent = m.activities.length;
+    el('sTransitions').textContent = m.transitions.length;
+    el('sInterfaces').textContent = m.interfaces.length;
+    el('sVars').textContent       = m.variables.length;
+    el('sFaults').textContent     = m.faults.length;
+
+    // Summary panel
+    el('summary').innerHTML = buildSummaryHtml(m);
+
+    // Activities table
+    el('activities').innerHTML = buildActivitiesHtml(m);
+
+    // Default flow diagram
+    buildFlowDiagram();
+  }
+
+  function buildSummaryHtml(m){
+    const procs = m.processes.map(p=>`<li><span class="tag">Process</span> <b>${esc(p.name)}</b> <span class="fine">(${esc(p.id)})</span></li>`).join('') || '<li class="fine">No explicit <code>process</code> tags found</li>';
+
+    const ifaces = m.interfaces.map(i=>`<li><span class="tag">${esc(i.type)}</span> <b>${esc(i.name)}</b> ${fmtAttrs(i.attrs)}</li>`).join('') || '<li class="fine">None detected</li>';
+
+    const vars = m.variables.map(v=>`<li><span class="tag">${esc(v.scope)}</span> <b>${esc(v.name)}</b> ${fmtAttrs(v.attrs)}</li>`).join('') || '<li class="fine">None detected</li>';
+
+    const faults = m.faults.map(f=>`<li><span class="tag">${esc(f.kind)}</span> <b>${esc(f.name)}</b> ${fmtAttrs(f.attrs)}</li>`).join('') || '<li class="fine">None detected</li>';
+
+    return `
+      <div class="grid">
+        <div>
+          <h3>Processes</h3>
+          <ul>${procs}</ul>
+        </div>
+        <div>
+          <h3>Interfaces / Endpoints</h3>
+          <ul>${ifaces}</ul>
+        </div>
+      </div>
+      <div class="grid" style="margin-top:10px">
+        <div>
+          <h3>Variables & Properties</h3>
+          <ul>${vars}</ul>
+        </div>
+        <div>
+          <h3>Faults & Handlers</h3>
+          <ul>${faults}</ul>
+        </div>
+      </div>
+    `;
+
+    function fmtAttrs(attrs){
+      const keys = Object.keys(attrs||{}).filter(k=>!['name','id','label','type'].includes(k));
+      if (!keys.length) return '';
+      return `<span class="fine">— ${keys.map(k=>`<span class="mono">${esc(k)}="${esc(attrs[k])}"</span>`).join(' ')}</span>`;
+    }
+  }
+
+  function buildActivitiesHtml(m){
+    const byType = new Map();
+    for (const a of m.activities){
+      const k = (a.type||'activity').toLowerCase();
+      if (!byType.has(k)) byType.set(k, []);
+      byType.get(k).push(a);
+    }
+    const groups = Array.from(byType.entries()).sort((a,b)=>b[1].length - a[1].length);
+    if (!groups.length) return '<p class="fine">No activities detected.</p>';
+
+    return groups.map(([type, items])=>{
+      const rows = items.map(it=>{
+        const outs = it.outBindings?.length ? `${it.outBindings.length} out` : '';
+        const ins  = it.inBindings?.length ? `${it.inBindings.length} in`  : '';
+        const io = [ins,outs].filter(Boolean).join(' / ');
+        return `<tr>
+          <td><span class="tag">${esc(type)}</span></td>
+          <td><b>${esc(it.name)}</b><div class="fine">${esc(it.id)}</div></td>
+          <td>${esc(it.parentProcess||'—')}</td>
+          <td class="fine">${io||'—'}</td>
+        </tr>`;
+      }).join('');
+      return `<details open>
+        <summary><b>${esc(type)}</b> <span class="fine">(${items.length})</span></summary>
+        <table>
+          <thead><tr><th>Type</th><th>Activity</th><th>Process</th><th>I/O</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </details>`
+    }).join('');
+  }
+
+  // --- Diagram Builders ---
+  function buildFlowDiagram(){
+    const src = mermaidFlowFromModel(state.model);
+    setMermaid(src);
+  }
+  function buildSequenceDiagram(){
+    const src = mermaidSequenceFromModel(state.model);
+    setMermaid(src);
+  }
+  el('btnFlow').onclick = buildFlowDiagram;
+  el('btnSeq').onclick  = buildSequenceDiagram;
+
+  function setMermaid(source){
+    el('mermaidSrc').textContent = source;
+    el('mermaid').innerHTML = source;
+    // re-render
+    mermaid.run({querySelector:'#mermaid'});
+  }
+
+  function mermaidFlowFromModel(m){
+    const lines = ["flowchart TD"]; // TD or LR
+    const nodes = new Set();
+    const nid = (name)=> esc(name).replace(/[^a-zA-Z0-9_]/g,'_').slice(0,40) || uuid('N');
+
+    // Group by process
+    const byProc = new Map();
+    for (const a of m.activities){
+      const p = a.parentProcess || 'Main';
+      if (!byProc.has(p)) byProc.set(p, []);
+      byProc.get(p).push(a);
+    }
+
+    for (const [proc, acts] of byProc){
+      const clusterId = nid(`cluster_${proc}`);
+      lines.push(`subgraph ${clusterId}[${esc(proc)}]`);
+      for (const a of acts){
+        const id = nid(a.id);
+        nodes.add(id);
+        lines.push(`${id}["${esc(a.name)}\n<small>${esc(a.type)}</small>"]`);
+      }
+      lines.push('end');
+    }
+
+    // Edges
+    for (const t of m.transitions){
+      const from = t.from ? nid(t.from) : nid(findByNearName(m.activities, t, 'from'));
+      const to   = t.to   ? nid(t.to)   : nid(findByNearName(m.activities, t, 'to'));
+      if (from && to){
+        const label = t.condition ? `|${esc(t.condition)}|` : '';
+        lines.push(`${from} -->${label} ${to}`);
+      }
+    }
+
+    if (lines.length===1){
+      lines.push('A[Start]-->B[No transitions detected]; B-->C[Check parser settings];');
+    }
+    return lines.join('\n');
+  }
+
+  function mermaidSequenceFromModel(m){
+    // Very heuristic: treat interfaces as participants; activities as messages in order.
+    const parts = new Set(m.interfaces.map(i=>i.name || i.type));
+    if (!parts.size) parts.add('System');
+
+    const lines = ["sequenceDiagram"]; 
+    for (const p of parts){ lines.push(`participant ${esc(p).replace(/\s+/g,'_')} as ${esc(p)}`); }
+
+    // naive ordering by document order
+    const orderedActs = m.activities.slice(0,50); // cap to keep diagram readable
+    for (const a of orderedActs){
+      const src = a.inBindings?.[0]?.partner || a.inBindings?.[0]?.endpoint || 'System';
+      const dst = a.outBindings?.[0]?.partner || a.outBindings?.[0]?.endpoint || 'System';
+      const s = esc(String(src)).replace(/\s+/g,'_');
+      const d = esc(String(dst)).replace(/\s+/g,'_');
+      lines.push(`${s}->>${d}: ${esc(a.name)} [${esc(a.type)}]`);
+    }
+
+    if (lines.length===1){
+      lines.push('Note over System: No interfaces/activities detected for sequence view');
+    }
+    return lines.join('\n');
+  }
+
+  function findByNearName(list, t, key){
+    // try to locate activity id/name by partial match
+    const val = t[key]; if (!val) return null;
+    const lc = val.toLowerCase();
+    return list.find(a=> (a.id||'').toLowerCase()===lc || (a.name||'').toLowerCase()===lc)?.id || null;
+  }
+
+  // --- Exporters ---
+  el('btnExportMD').onclick = ()=> exportMarkdown();
+  el('btnExportHTML').onclick = ()=> exportHtml();
+
+  function exportMarkdown(){
+    const m = state.model; if (!m) return;
+    const name = (state.fileName||'process').replace(/\.[^.]+$/,'');
+    const md = `# BusinessWorks Process Documentation\n\n`+
+`**Source file:** ${esc(name)}\n\n`+
+`## Summary\n`+
+`- Processes: ${m.processes.length}\n`+
+`- Activities: ${m.activities.length}\n`+
+`- Transitions: ${m.transitions.length}\n`+
+`- Interfaces: ${m.interfaces.length}\n`+
+`- Variables: ${m.variables.length}\n`+
+`- Faults: ${m.faults.length}\n\n`+
+`## Processes\n`+
+ m.processes.map(p=>`- **${p.name}** (${p.id})`).join('\n') + `\n\n`+
+`## Interfaces\n`+
+ (m.interfaces.length? m.interfaces.map(i=>`- **${i.name}** (${i.type})`).join('\n'): '_None_') + `\n\n`+
+`## Variables\n`+
+ (m.variables.length? m.variables.map(v=>`- **${v.name}** (${v.scope})`).join('\n'): '_None_') + `\n\n`+
+`## Faults & Handlers\n`+
+ (m.faults.length? m.faults.map(f=>`- **${f.name}** (${f.kind})`).join('\n'): '_None_') + `\n\n`+
+`## Activities (by type)\n`+
+ groupBy(m.activities,a=>a.type).map(([type, items])=>`### ${type}\n` + items.map(it=>`- **${it.name}** — id: ${it.id} — process: ${it.parentProcess||'Main'}`).join('\n')).join('\n\n') + `\n\n`+
+`## Flowchart (Mermaid)\n`+
+'```mermaid\n'+ mermaidFlowFromModel(m) + '\n```\n\n' +
+`## Sequence (Mermaid)\n`+
+'```mermaid\n'+ mermaidSequenceFromModel(m) + '\n```\n';
+
+    const blob = new Blob([md], {type:'text/markdown;charset=utf-8'});
+    saveAs(blob, `${name}_documentation.md`);
+  }
+
+  function exportHtml(){
+    const m = state.model; if (!m) return;
+    const name = (state.fileName||'process').replace(/\.[^.]+$/,'');
+    const flow = mermaidFlowFromModel(m);
+    const seq  = mermaidSequenceFromModel(m);
+    const html = `<!doctype html><html><head><meta charset=\"utf-8\"><title>${esc(name)} – Documentation</title>`+
+      `<script src=\"https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js\"></script>`+
+      `<style>body{font-family:ui-sans-serif,system-ui;max-width:900px;margin:20px auto;padding:0 16px;} pre{background:#f7f7f9;padding:12px;border-radius:8px;overflow:auto}</style>`+
+      `</head><body>`+
+      `<h1>${esc(name)} – BusinessWorks Documentation</h1>`+
+      `<p><b>Generated:</b> ${new Date().toLocaleString()}</p>`+
+      `<h2>Summary</h2>`+
+      `<ul>`+
+      `<li>Processes: ${m.processes.length}</li>`+
+      `<li>Activities: ${m.activities.length}</li>`+
+      `<li>Transitions: ${m.transitions.length}</li>`+
+      `<li>Interfaces: ${m.interfaces.length}</li>`+
+      `<li>Variables: ${m.variables.length}</li>`+
+      `<li>Faults: ${m.faults.length}</li>`+
+      `</ul>`+
+      `<h2>Flowchart</h2><div class=\"mermaid\">${flow.replaceAll('<','&lt;')}</div>`+
+      `<h2>Sequence</h2><div class=\"mermaid\">${seq.replaceAll('<','&lt;')}</div>`+
+      `<h2>Activities (by type)</h2>`+
+      groupBy(m.activities,a=>a.type).map(([type, items])=>`<h3>${esc(type)}</h3><ul>`+ items.map(it=>`<li><b>${esc(it.name)}</b> — id: ${esc(it.id)} — process: ${esc(it.parentProcess||'Main')}</li>`).join('')+`</ul>`).join('')+
+      `<script>mermaid.initialize({startOnLoad:true});</script>`+
+      `</body></html>`;
+
+    const blob = new Blob([html], {type:'text/html;charset=utf-8'});
+    saveAs(blob, `${name}_documentation.html`);
+  }
+
+  function esc(s){ return String(s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+  function groupBy(list, fn){
+    const m = new Map();
+    for (const item of list){
+      const k = fn(item) || 'unknown';
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(item);
+    }
+    return Array.from(m.entries());
+  }
+</script>
 </body>
 </html>
