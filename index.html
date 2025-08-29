@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TIBCO Process Viewer</title>
+  <link rel="stylesheet" href="style.css"/>
+  <script src="assets/mermaid.min.js"></script>
+</head>
+<body>
+  <h1>TIBCO Process Viewer</h1>
+  
+  <input type="file" id="fileInput" multiple accept=".process"/>
+  <div id="fileList"></div>
+
+  <div id="output">
+    <h2>Process Graph</h2>
+    <pre class="mermaid" id="mermaidGraph"></pre>
+
+    <h2>YAML Output</h2>
+    <pre id="yamlOutput"></pre>
+
+    <h2>Markdown Description</h2>
+    <pre id="markdownOutput"></pre>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
