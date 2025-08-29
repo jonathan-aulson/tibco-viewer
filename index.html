@@ -98,6 +98,14 @@
               <option value="LR">LR</option>
             </select>
           </label>
+          <label class="fine" style="margin-right:6px">Level:
+            <select id="optLevel" class="btn" style="padding:6px 8px">
+              <option value="0">Process only</option>
+              <option value="1">Containers</option>
+              <option value="2">Containers + 1st‑level activities</option>
+              <option value="3" selected>All activities</option>
+            </select>
+          </label>
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optSwim" type="checkbox"> Swimlanes</label>
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optLinearize" type="checkbox"> Linearize (ignore links)</label>
           <button id="btnFlow" class="primary">Build Flowchart</button>
@@ -258,6 +266,17 @@
     const activityTags = new Set(['receive','reply','invoke','assign','throw','rethrow','wait','empty','pick','onmessage','onalarm']);
     const containerTags = new Set(['sequence','flow','scope']);
 
+    // Containers with depth and relationships
+    const containers = all.filter(n=>containerTags.has(local(n))).map(c=>({
+      id: c.getAttribute('name') || c.getAttribute('id') || uuid('cnt'),
+      name: c.getAttribute('name') || local(c),
+      type: local(c),
+      parentProcess: findAncestor(c,'process')?.getAttribute('name') || null,
+      parentContainer: findAncestorAny(c, containerTags)?.getAttribute('name') || null,
+      depth: depthOf(c, containerTags),
+      raw: c
+    }));
+
     const activities = all.filter(n=>{
       const ln = local(n);
       const hasType = n.hasAttribute && (n.hasAttribute('type') || n.hasAttribute('activityType'));
@@ -268,6 +287,7 @@
       type: a.getAttribute('type') || a.getAttribute('activityType') || local(a),
       parentProcess: findAncestor(a,'process')?.getAttribute('name') || null,
       parentScope: (findAncestor(a,'scope')?.getAttribute('name')) || (findAncestor(a,'sequence')?.getAttribute('name')) || (findAncestor(a,'flow')?.getAttribute('name')) || null,
+      containerDepth: depthOf(a, containerTags),
       raw: a
     }));
 
@@ -301,7 +321,7 @@
     // Build simple hierarchical outline per process
     const hierarchy = processes.map(p=>({ name:p.name, type:'process', children: outlineChildren(p.raw) }));
 
-    return { processes, activities, transitions, interfaces, variables, faults, hierarchy };
+    return { processes, activities, transitions, interfaces, variables, faults, hierarchy, containers };
 
     function outlineChildren(root){
       const kids = [];
@@ -316,7 +336,17 @@
       return kids;
     }
 
+    function depthOf(node, tagSet){
+      let d = 0, p = node.parentElement;
+      while(p){
+        if (tagSet.has(local(p))) d++;
+        if (local(p)==='process') break;
+        p = p.parentElement;
+      }
+      return d;
+    }
     function findAncestor(node, localName){ let p=node.parentElement; while(p){ if ((p.localName||'').toLowerCase()===localName) return p; p=p.parentElement; } return null; }
+    function findAncestorAny(node, set){ let p=node.parentElement; while(p){ if (set.has(local(p))) return p; p=p.parentElement; } return null; }
     function serializeAttrs(node){ const o={}; if (!node?.attributes) return o; for(const a of node.attributes){ o[a.name]=a.value; } return o; }
   }
 
@@ -438,7 +468,8 @@
     const dir = (document.getElementById('optDir')?.value) || 'TD';
     const swim = !!document.getElementById('optSwim')?.checked;
     const lin  = !!document.getElementById('optLinearize')?.checked;
-    const src = mermaidFlowFromModel(m, { dir: dir, swimlanes: swim, linearize: lin });
+    const level = parseInt(document.getElementById('optLevel')?.value || '3', 10);
+    const src = mermaidFlowFromModel(m, { dir: dir, swimlanes: swim, linearize: lin, level: level });
     setMermaid(src);
   }
   function buildSequenceDiagram(){
@@ -452,6 +483,7 @@
   document.getElementById('optDir').onchange = buildFlowDiagram;
   document.getElementById('optSwim').onchange = buildFlowDiagram;
   document.getElementById('optLinearize').onchange = buildFlowDiagram;
+  document.getElementById('optLevel').onchange = buildFlowDiagram;
 
   function setMermaid(source){
     el('mermaidSrc').textContent = source;
@@ -527,6 +559,91 @@
     if (lines.length<=1){ lines.push('A[Start]-->B[No transitions detected];'); }
     return lines.join('\n');
   }
+
+  // Override mermaidFlowFromModel to support multiple abstraction levels
+  mermaidFlowFromModel = function(m, opts = {}) {
+    const dir = opts.dir || 'TD';
+    const swim = !!opts.swimlanes;
+    const linearize = !!opts.linearize;
+    const level = Number.isFinite(opts.level) ? opts.level : 3;
+    const lines = ["flowchart "+dir];
+    const nid = (name) => esc(name||'').replace(/[^a-zA-Z0-9_]/g,'_').slice(0,40) || uuid('N');
+
+    // Group activities and containers by process
+    const byProcActs = new Map();
+    for (const a of m.activities){
+      const p = a.parentProcess || 'Main';
+      if (!byProcActs.has(p)) byProcActs.set(p, []);
+      byProcActs.get(p).push(a);
+    }
+    const byProcCnt = new Map();
+    for (const c of (m.containers || [])){
+      const p = c.parentProcess || 'Main';
+      if (!byProcCnt.has(p)) byProcCnt.set(p, []);
+      byProcCnt.get(p).push(c);
+    }
+
+    for (const proc of new Set([...(byProcActs.keys()), ...(byProcCnt.keys())])) {
+      const procId = nid(`cluster_${proc}`);
+      const acts = byProcActs.get(proc) || [];
+      const cnts = byProcCnt.get(proc) || [];
+
+      const items = [];
+      if (level === 0) {
+        // Only process itself
+        items.push({ id: nid(`${proc}_PROC`), label: esc(proc), type:'process', raw:null });
+      } else if (level === 1) {
+        // Containers only
+        if (cnts.length){
+          for (const c of cnts){ if (c.depth === 0) items.push({ id: nid(`${proc}_${c.id}`), label: `${c.name}\n<small>${c.type}</small>`, type:'container', raw:c.raw }); }
+        } else {
+          items.push({ id: nid(`${proc}_PROC`), label: esc(proc), type:'process', raw:null });
+        }
+      } else if (level === 2) {
+        // Containers + first-level activities (containerDepth==0)
+        for (const c of cnts){ if (c.depth === 0) items.push({ id: nid(`${proc}_${c.id}`), label: `${c.name}\n<small>${c.type}</small>`, type:'container', raw:c.raw }); }
+        for (const a of acts){ if ((a.containerDepth || 0) === 0) items.push({ id: nid(`${proc}_${a.id}`), label: `${a.name}\n<small>${a.type}</small>`, type:'activity', raw:a.raw }); }
+      } else {
+        // All activities
+        for (const a of acts){ items.push({ id: nid(`${proc}_${a.id}`), label: `${a.name}\n<small>${a.type}</small>`, type:'activity', raw:a.raw }); }
+      }
+
+      // Draw subgraph for process swimlane
+      if (swim) lines.push(`subgraph ${procId}[${esc(proc)}]`);
+
+      for (const it of items){
+        lines.push(`${it.id}[\"${it.label}\"]`);
+      }
+
+      if (swim) lines.push('end');
+
+      // Edges
+      if (level < 3 || linearize) {
+        // link items in document order
+        const ordered = items.slice().sort((a,b) => {
+          if (a.raw && b.raw && a.raw.compareDocumentPosition) {
+            const cmp = a.raw.compareDocumentPosition(b.raw);
+            if (cmp & 2) return 1;
+            if (cmp & 4) return -1;
+          }
+          return 0;
+        });
+        for (let i = 0; i < ordered.length - 1; i++){
+          lines.push(`${ordered[i].id} --> ${ordered[i+1].id}`);
+        }
+      } else {
+        for (const t of m.transitions){
+          const from = nid(`${t.parentProcess || proc}_${t.from || t.id + 'f'}`);
+          const to   = nid(`${t.parentProcess || proc}_${t.to || t.id + 't'}`);
+          const label = t.condition ? `|${esc(t.condition)}|` : '';
+          lines.push(`${from} -->${label} ${to}`);
+        }
+      }
+    }
+
+    if (lines.length <= 1){ lines.push('A[Start]-->B[No transitions detected];'); }
+    return lines.join('\n');
+  };
 
   function mermaidSequenceFromModel(m){
     // Very heuristic: treat interfaces as participants; activities as messages in order.
