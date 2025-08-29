@@ -92,6 +92,14 @@
     <div class="panel" style="margin-top:16px">
       <div class="hdr"><h2>3) Workflow Diagram (Mermaid)</h2>
         <div class="btns">
+          <label class="fine" style="margin-right:6px">Dir:
+            <select id="optDir" class="btn" style="padding:6px 8px">
+              <option value="TD">TD</option>
+              <option value="LR">LR</option>
+            </select>
+          </label>
+          <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optSwim" type="checkbox"> Swimlanes</label>
+          <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optLinearize" type="checkbox"> Linearize (ignore links)</label>
           <button id="btnFlow" class="primary">Build Flowchart</button>
           <button id="btnSeq">Build Sequence</button>
         </div>
@@ -127,7 +135,14 @@
       </div>
     </div>
 
-    <footer>
+    <div class="panel" style="margin-top:16px">
+      <div class="hdr"><h2>BPEL Outline</h2><span class="fine">sequence / flow / scope with nested activities</span></div>
+      <div class="body" id="outline"></div>
+    </div>
+
+  </div>
+
+<footer>
       <div class="fine">Notes:
         <ul>
           <li>This viewer is schema‑tolerant: it tries to parse common BusinessWorks process structures from <code>.bwp</code> (XML) or zipped project bundles and gracefully lists unknown tags/attributes.</li>
@@ -212,63 +227,40 @@
   // --- Normalization: build a minimal, schema‑tolerant model ---
   function normalizeModel(doc){
     const all = Array.from(doc.getElementsByTagName('*'));
-    const byTag = (name)=>all.filter(n=> (n.localName||'').toLowerCase()===name.toLowerCase());
     const local = (n)=> (n.localName||'').toLowerCase();
+    const byTag = (name)=>all.filter(n=> local(n)===name.toLowerCase());
 
-    // Processes (WS-BPEL or BW)
     const processes = byTag('process').map(p=>({
       id: p.getAttribute('name') || p.getAttribute('id') || uuid('proc'),
       name: p.getAttribute('name') || p.getAttribute('label') || 'Process',
       raw: p
     }));
 
-    // Activities: include BW generic + WS-BPEL common activities
-    const bpelActivities = new Set(['receive','reply','invoke','assign','throw','rethrow','wait','empty','sequence','flow','if','while','repeatuntil','pick','scope']);
+    const activityTags = new Set(['receive','reply','invoke','assign','throw','rethrow','wait','empty','pick','onmessage','onalarm']);
+    const containerTags = new Set(['sequence','flow','scope']);
+
     const activities = all.filter(n=>{
       const ln = local(n);
       const hasType = n.hasAttribute && (n.hasAttribute('type') || n.hasAttribute('activityType'));
-      return /activity$/i.test(ln) || hasType || bpelActivities.has(ln);
+      return /activity$/i.test(ln) || hasType || activityTags.has(ln);
     }).map(a=>({
       id: a.getAttribute('name') || a.getAttribute('id') || uuid('act'),
       name: a.getAttribute('name') || a.getAttribute('label') || a.localName,
       type: a.getAttribute('type') || a.getAttribute('activityType') || local(a),
       parentProcess: findAncestor(a,'process')?.getAttribute('name') || null,
+      parentScope: (findAncestor(a,'scope')?.getAttribute('name')) || (findAncestor(a,'sequence')?.getAttribute('name')) || (findAncestor(a,'flow')?.getAttribute('name')) || null,
       raw: a
     }));
 
-    // Transitions: simple heuristic
-    const transitions = [];
-    // 1) Sequence: connect direct children activities in order
-    for (const seq of byTag('sequence')){
-      const kids = Array.from(seq.children).filter(c=>activities.find(a=>a.raw===c));
-      for (let i=0;i<kids.length-1;i++){
-        const fromA = activities.find(a=>a.raw===kids[i]);
-        const toA   = activities.find(a=>a.raw===kids[i+1]);
-        if (fromA && toA){
-          transitions.push({ id: uuid('tr'), from: fromA.id, to: toA.id, condition: '', parentProcess: fromA.parentProcess, raw: seq });
-        }
-      }
-    }
-    // 2) Flow with links: map via sources/targets (best-effort)
-    for (const flow of byTag('flow')){
-      const linkDecls = Array.from(flow.getElementsByTagName('*')).filter(n=>local(n)==='link');
-      const linkNames = new Set(linkDecls.map(l=>l.getAttribute('name')).filter(Boolean));
-      if (!linkNames.size) continue;
-      const actsInFlow = activities.filter(a=>flow.contains(a.raw));
-      for (const act of actsInFlow){
-        const sources = Array.from(act.raw.getElementsByTagName('*')).filter(n=>local(n)==='source');
-        const targets = Array.from(act.raw.getElementsByTagName('*')).filter(n=>local(n)==='target');
-        for (const s of sources){
-          const ln = s.getAttribute('linkName');
-          if (!ln) continue;
-          // find activity that has a matching target linkName
-          const dest = actsInFlow.find(a=> Array.from(a.raw.getElementsByTagName('*')).some(n=>local(n)==='target' && n.getAttribute('linkName')===ln));
-          if (dest){ transitions.push({ id: uuid('tr'), from: act.id, to: dest.id, condition: '', parentProcess: act.parentProcess, raw: flow }); }
-        }
-      }
-    }
+    const transitions = all.filter(n=>/transition|edge|link/i.test(local(n)) || (n.hasAttribute?.('from') && n.hasAttribute?.('to'))).map(t=>({
+      id: t.getAttribute('name') || t.getAttribute('id') || uuid('tr'),
+      from: t.getAttribute('from') || t.getAttribute('source') || t.getAttribute('start') || t.getAttribute('fromActivity') || '',
+      to:   t.getAttribute('to')   || t.getAttribute('target') || t.getAttribute('end')   || t.getAttribute('toActivity')   || '',
+      condition: t.getAttribute('condition') || t.getAttribute('expr') || '',
+      parentProcess: findAncestor(t,'process')?.getAttribute('name') || null,
+      raw: t
+    }));
 
-    // Interfaces/variables/faults (best‑effort)
     const interfaces = all.filter(n=>['interface','partner','binding','endpoint','operation'].includes(local(n))).map(n=>({
       name: n.getAttribute('name') || n.localName,
       type: n.getAttribute('type') || n.localName,
@@ -287,7 +279,26 @@
       attrs: serializeAttrs(n)
     }));
 
-    return { processes, activities, transitions, interfaces, variables, faults };
+    // Build simple hierarchical outline per process
+    const hierarchy = processes.map(p=>({ name:p.name, type:'process', children: outlineChildren(p.raw) }));
+
+    return { processes, activities, transitions, interfaces, variables, faults, hierarchy };
+
+    function outlineChildren(root){
+      const kids = [];
+      for (const ch of Array.from(root.children)){
+        const ln = local(ch);
+        if (containerTags.has(ln)){
+          kids.push({ name: ch.getAttribute('name')||ln, type: ln, children: outlineChildren(ch) });
+        } else if (activityTags.has(ln) || /activity$/i.test(ln) || ch.hasAttribute('type') || ch.hasAttribute('activityType')){
+          kids.push({ name: ch.getAttribute('name')||ch.localName, type: ch.getAttribute('type')||ch.getAttribute('activityType')||ln, children: [] });
+        }
+      }
+      return kids;
+    }
+    function findAncestor(node, localName){ let p=node.parentElement; while(p){ if ((p.localName||'').toLowerCase()===localName) return p; p=p.parentElement; } return null; }
+    function serializeAttrs(node){ const o={}; if (!node?.attributes) return o; for(const a of node.attributes){ o[a.name]=a.value; } return o; }
+  }
 
     function findAncestor(node, localName){ let p=node.parentElement; while(p){ if ((p.localName||'').toLowerCase()===localName) return p; p=p.parentElement; } return null; }
     function serializeAttrs(node){ const o={}; if (!node?.attributes) return o; for(const a of node.attributes){ o[a.name]=a.value; } return o; }
@@ -320,6 +331,7 @@
 
     // Summary panel
     el('summary').innerHTML = buildSummaryHtml(m);
+    el('outline').innerHTML = buildOutlineHtml(m);
 
     // Activities table
     el('activities').innerHTML = buildActivitiesHtml(m);
@@ -401,15 +413,24 @@
 
   // --- Diagram Builders ---
   function buildFlowDiagram(){
-    const src = mermaidFlowFromModel(state.model);
+    const m = state.model; if (!m) return;
+    const dir = (document.getElementById('optDir')?.value)||'TD';
+    const swim = !!document.getElementById('optSwim')?.checked;
+    const lin  = !!document.getElementById('optLinearize')?.checked;
+    const src = mermaidFlowFromModel(m, {dir, swimlanes:swim, linearize:lin});
     setMermaid(src);
   }
   function buildSequenceDiagram(){
+    // rebuild with current dir opt affecting nothing here, retained for parity
+
     const src = mermaidSequenceFromModel(state.model);
     setMermaid(src);
   }
   el('btnFlow').onclick = buildFlowDiagram;
   el('btnSeq').onclick  = buildSequenceDiagram;
+  document.getElementById('optDir').onchange = buildFlowDiagram;
+  document.getElementById('optSwim').onchange = buildFlowDiagram;
+  document.getElementById('optLinearize').onchange = buildFlowDiagram;
 
   function setMermaid(source){
     el('mermaidSrc').textContent = source;
@@ -418,12 +439,14 @@
     try { if (window.mermaid) { mermaid.run({querySelector:'#mermaid'}); } } catch (e) { console.warn('Mermaid render skipped', e); }
   }
 
-  function mermaidFlowFromModel(m){
-    const lines = ["flowchart TD"]; // TD or LR
-    const nodes = new Set();
-    const nid = (name)=> esc(name).replace(/[^a-zA-Z0-9_]/g,'_').slice(0,40) || uuid('N');
+  function mermaidFlowFromModel(m, opts={}){
+    const dir = opts.dir||'TD';
+    const swim = !!opts.swimlanes;
+    const linearize = !!opts.linearize;
+    const lines = ["flowchart "+dir];
+    const nid = (name)=> esc(name||'').replace(/[^a-zA-Z0-9_]/g,'_').slice(0,40) || uuid('N');
 
-    // Group by process
+    // Group activities by process, then by scope (if any)
     const byProc = new Map();
     for (const a of m.activities){
       const p = a.parentProcess || 'Main';
@@ -432,30 +455,60 @@
     }
 
     for (const [proc, acts] of byProc){
-      const clusterId = nid(`cluster_${proc}`);
-      lines.push(`subgraph ${clusterId}[${esc(proc)}]`);
+      const procId = nid(`cluster_${proc}`);
+      if (swim) lines.push(`subgraph ${procId}[${esc(proc)}]`);
+
+      // group by scope if swimlanes
+      const byScope = new Map();
       for (const a of acts){
-        const id = nid(a.id);
-        nodes.add(id);
-        lines.push(`${id}["${esc(a.name)}\n<small>${esc(a.type)}</small>"]`);
+        const s = a.parentScope || 'default';
+        if (!byScope.has(s)) byScope.set(s, []);
+        byScope.get(s).push(a);
       }
-      lines.push('end');
+      if (swim){
+        for (const [scope, items] of byScope){
+          const sid = nid(`scope_${proc}_${scope}`);
+          lines.push(`subgraph ${sid}[${esc(scope==='default'?'(no scope)':scope)}]`);
+          for (const a of items){
+            const id = nid(`${proc}_${a.id}`);
+            lines.push(`${id}["${esc(a.name)}\n<small>${esc(a.type)}</small>"]`);
+          }
+          lines.push('end');
+        }
+      } else {
+        for (const a of acts){
+          const id = nid(`${proc}_${a.id}`);
+          lines.push(`${id}["${esc(a.name)}\n<small>${esc(a.type)}</small>"]`);
+        }
+      }
+      if (swim) lines.push('end');
     }
 
     // Edges
-    for (const t of m.transitions){
-      const from = t.from ? nid(t.from) : nid(findByNearName(m.activities, t, 'from'));
-      const to   = t.to   ? nid(t.to)   : nid(findByNearName(m.activities, t, 'to'));
-      if (from && to){
+    if (linearize){
+      // simple document-order edges per process
+      const ordered = [...m.activities].sort((a,b)=>{
+        return a.raw?.sourceIndex - b.raw?.sourceIndex;
+      });
+      for (let i=0;i<ordered.length-1;i++){
+        const from = nid(`${ordered[i].parentProcess||'Main'}_${ordered[i].id}`);
+        const to   = nid(`${ordered[i+1].parentProcess||'Main'}_${ordered[i+1].id}`);
+        lines.push(`${from} --> ${to}`);
+      }
+    } else {
+      for (const t of m.transitions){
+        const from = nid(`${t.parentProcess||'Main'}_${t.from||t.id+'f'}`);
+        const to   = nid(`${t.parentProcess||'Main'}_${t.to||t.id+'t'}`);
         const label = t.condition ? `|${esc(t.condition)}|` : '';
         lines.push(`${from} -->${label} ${to}`);
       }
     }
 
-    if (lines.length===1){
-      lines.push('A[Start]-->B[No transitions detected]; B-->C[Check parser settings];');
+    if (lines.length<=1){
+      lines.push('A[Start]-->B[No transitions detected];');
     }
-    return lines.join('\n');
+    return lines.join('
+');
   }
 
   function mermaidSequenceFromModel(m){
@@ -564,6 +617,14 @@
       m.get(k).push(item);
     }
     return Array.from(m.entries());
+  }
+  function buildOutlineHtml(m){
+    if (!m.hierarchy?.length) return '<p class="fine">No BPEL outline detected.</p>';
+    const render = (node)=>{
+      if (!node.children?.length) return `<li><span class="tag">${esc(node.type)}</span> <b>${esc(node.name)}</b></li>`;
+      return `<li><span class="tag">${esc(node.type)}</span> <b>${esc(node.name)}</b><ul>`+node.children.map(render).join('')+`</ul></li>`;
+    };
+    return '<ul>'+ m.hierarchy.map(render).join('') + '</ul>';
   }
 </script>
 </body>
