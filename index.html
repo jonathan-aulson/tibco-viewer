@@ -44,6 +44,10 @@
     .stat .v{font-weight:800;font-size:22px}
     .hidden{display:none}
     .mermaid{background:#0c1330;border:1px solid #27367a;border-radius:10px;padding:12px}
+    /* Ensure rendered SVGs fill their containers and stay responsive */
+    .mermaid svg{width:100%;height:auto;max-width:none;}
+    /* Give the diagram container a minimum height and allow scrolling if necessary */
+    #mermaid{min-height:520px;overflow:auto;border:1px solid #27367a;border-radius:12px;padding:8px}
     footer{margin:36px 0;color:#8aa0ff}
     .mono{font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
   </style>
@@ -110,6 +114,10 @@
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optLinearize" type="checkbox"> Linearize (ignore links)</label>
           <button id="btnFlow" class="primary">Build Flowchart</button>
           <button id="btnSeq">Build Sequence</button>
+          <!-- Zoom controls for Mermaid diagram -->
+          <button id="zoomIn">Zoom +</button>
+          <button id="zoomOut">Zoom −</button>
+          <button id="zoomReset">Fit</button>
         </div>
       </div>
       <div class="body">
@@ -479,6 +487,30 @@
   el('btnFlow').onclick = buildFlowDiagram;
   el('btnSeq').onclick  = buildSequenceDiagram;
 
+  // Zoom handling for the rendered Mermaid diagram. Maintains a scale factor and
+  // applies it to the SVG on demand. Users can zoom in/out or reset via buttons.
+  let zoomScale = 1;
+  function applyZoom(){
+    const svg = document.querySelector('#mermaid svg');
+    if (!svg) return;
+    svg.style.transformOrigin = '0 0';
+    svg.style.transform = `scale(${zoomScale})`;
+  }
+
+  // Attach zoom button handlers once the DOM is ready
+  document.getElementById('zoomIn').onclick = ()=>{
+    zoomScale = Math.min(4, zoomScale * 1.2);
+    applyZoom();
+  };
+  document.getElementById('zoomOut').onclick = ()=>{
+    zoomScale = Math.max(0.25, zoomScale / 1.2);
+    applyZoom();
+  };
+  document.getElementById('zoomReset').onclick = ()=>{
+    zoomScale = 1;
+    applyZoom();
+  };
+
   // update flowchart when options change
   document.getElementById('optDir').onchange = buildFlowDiagram;
   document.getElementById('optSwim').onchange = buildFlowDiagram;
@@ -486,10 +518,21 @@
   document.getElementById('optLevel').onchange = buildFlowDiagram;
 
   function setMermaid(source){
+    // Update the displayed Mermaid source code
     el('mermaidSrc').textContent = source;
-    el('mermaid').innerHTML = source;
-    // re-render
-    mermaid.run({querySelector:'#mermaid'});
+    // Prepare an init directive to ensure diagrams use full width and dark theme.
+    const init = "%%{init: {'flowchart': {'useMaxWidth': true}, 'theme': 'dark'} }%%\n";
+    const container = el('mermaid');
+    // Wrap the source in a div with class mermaid so that Mermaid.js picks it up
+    container.innerHTML = '<div class="mermaid">' + init + source + '</div>';
+    // Attempt to render the Mermaid diagram; catch errors to avoid breaking the UI
+    try {
+      mermaid.run({ querySelector: '#mermaid .mermaid' });
+    } catch (e) {
+      console.warn('Mermaid render error', e);
+    }
+    // Apply any existing zoom scale to the new SVG
+    applyZoom();
   }
 
   function mermaidFlowFromModel(m, opts = {}){
@@ -722,7 +765,8 @@
     // Embed external Mermaid script. Break up the word "script" so the containing
     // HTML parser does not terminate this parent <script> prematurely.
     parts.push('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></scr'+'ipt>');
-    parts.push('<style>body{font-family:ui-sans-serif,system-ui;max-width:900px;margin:20px auto;padding:0 16px;} pre{background:#f7f7f9;padding:12px;border-radius:8px;overflow:auto}</style>');
+    // Apply basic styling and ensure diagrams are responsive and scrollable
+    parts.push('<style>body{font-family:ui-sans-serif,system-ui;max-width:900px;margin:20px auto;padding:0 16px;} pre{background:#f7f7f9;padding:12px;border-radius:8px;overflow:auto} .mermaid svg{width:100%;height:auto;max-width:none;} .stage{min-height:520px;overflow:auto;border:1px solid #e0e0e0;border-radius:12px;padding:8px;margin-bottom:24px;}</style>');
     parts.push('</head><body>');
     // Summary header
     parts.push('<h1>'+esc(name)+' – BusinessWorks Documentation</h1>');
@@ -736,17 +780,16 @@
     parts.push('<li>Variables: '+m.variables.length+'</li>');
     parts.push('<li>Faults: '+m.faults.length+'</li>');
     parts.push('</ul>');
-    // Flowchart and sequence diagrams
-    parts.push('<h2>Flowchart</h2><div class="mermaid">'+flow.replaceAll('<','&lt;')+'</div>');
-    parts.push('<h2>Sequence</h2><div class="mermaid">'+seq.replaceAll('<','&lt;')+'</div>');
+    // Flowchart and sequence diagrams. Wrap in a .stage container for min-height and scrolling.
+    parts.push('<h2>Flowchart</h2><div class="stage"><div class="mermaid">%%{init: {\'flowchart\': {\'useMaxWidth\': true}, \'theme\': \'default\'} }%%\n'+flow.replaceAll('<','&lt;')+'</div></div>');
+    parts.push('<h2>Sequence</h2><div class="stage"><div class="mermaid">%%{init: {\'flowchart\': {\'useMaxWidth\': true}, \'theme\': \'default\'} }%%\n'+seq.replaceAll('<','&lt;')+'</div></div>');
     // Activities grouped by type
     parts.push('<h2>Activities (by type)</h2>');
     parts.push(groupBy(m.activities, a=>a.type).map(([type, items]) => {
       return '<h3>'+esc(type)+'</h3><ul>' + items.map(it => '<li><b>'+esc(it.name)+'</b> — id: '+esc(it.id)+' — process: '+esc(it.parentProcess || 'Main')+'</li>').join('') + '</ul>';
     }).join(''));
-    // Initialize Mermaid in exported document
-    // Initialize Mermaid in the exported document. Use broken-up tags to avoid ending the parent script.
-    parts.push('<scr'+'ipt>mermaid.initialize({startOnLoad:true});</scr'+'ipt>');
+    // Initialize Mermaid in exported document and render diagrams. Use broken-up tags to avoid ending the parent script.
+    parts.push('<scr'+'ipt>try{mermaid.initialize({startOnLoad:false,theme:"default",flowchart:{useMaxWidth:true,htmlLabels:true}});mermaid.run({querySelector:".mermaid"});}catch(e){console.error(e);}</scr'+'ipt>');
     parts.push('</body></html>');
     const html = parts.join('');
     const blob = new Blob([html], { type:'text/html;charset=utf-8' });
