@@ -66,7 +66,7 @@
             <div id="drop">
               <p>Drop your <b>.bwp</b> here</p>
               <p class="fine">or</p>
-              <label class="file"><input id="file" type="file" accept=".bwp,.xml,.zip"/>Choose file</label>
+              <label class="file" for="file">Choose file</label><input id="file" type="file" accept=".bwp,.xml,.zip" />
             </div>
             <div id="fileInfo" class="fine" style="margin-top:10px"></div>
           </div>
@@ -140,7 +140,7 @@
 
 <script>
   // --- Mermaid init ---
-  mermaid.initialize({ startOnLoad: true, securityLevel: 'loose', theme: 'dark' });
+  try { if (window.mermaid) { mermaid.initialize({ startOnLoad: true, securityLevel: 'loose', theme: 'dark' }); } } catch (e) { console.warn('Mermaid init failed', e); }
 
   // --- State ---
   let state = {
@@ -211,64 +211,87 @@
 
   // --- Normalization: build a minimal, schema‑tolerant model ---
   function normalizeModel(doc){
-    // Try common BW namespaces / tags but do not rely on specific ns prefixes.
-    // Strategy: pull generic things by localName.
-    const byTag = (name)=>Array.from(doc.getElementsByTagName('*')).filter(n=>n.localName===name);
-    const text = (node, sel)=> node?.getAttribute?.(sel) || node?.textContent || '';
+    const all = Array.from(doc.getElementsByTagName('*'));
+    const byTag = (name)=>all.filter(n=> (n.localName||'').toLowerCase()===name.toLowerCase());
+    const local = (n)=> (n.localName||'').toLowerCase();
 
-    // Processes
+    // Processes (WS-BPEL or BW)
     const processes = byTag('process').map(p=>({
-      id: p.getAttribute('name') || p.getAttribute('id') || p.getAttribute('label') || uuid('proc'),
+      id: p.getAttribute('name') || p.getAttribute('id') || uuid('proc'),
       name: p.getAttribute('name') || p.getAttribute('label') || 'Process',
       raw: p
     }));
 
-    // Activities (very broad: any element with attribute 'type' or ending in 'Activity')
-    const allElems = Array.from(doc.getElementsByTagName('*'));
-    const activities = allElems.filter(n=>{
-      const ln = n.localName || n.tagName;
+    // Activities: include BW generic + WS-BPEL common activities
+    const bpelActivities = new Set(['receive','reply','invoke','assign','throw','rethrow','wait','empty','sequence','flow','if','while','repeatuntil','pick','scope']);
+    const activities = all.filter(n=>{
+      const ln = local(n);
       const hasType = n.hasAttribute && (n.hasAttribute('type') || n.hasAttribute('activityType'));
-      return /activity$/i.test(ln) || hasType;
+      return /activity$/i.test(ln) || hasType || bpelActivities.has(ln);
     }).map(a=>({
       id: a.getAttribute('name') || a.getAttribute('id') || uuid('act'),
       name: a.getAttribute('name') || a.getAttribute('label') || a.localName,
-      type: a.getAttribute('type') || a.getAttribute('activityType') || a.localName,
+      type: a.getAttribute('type') || a.getAttribute('activityType') || local(a),
       parentProcess: findAncestor(a,'process')?.getAttribute('name') || null,
-      inBindings: Array.from(a.children).filter(c=>/input|inbinding|config/i.test(c.localName)).map(c=>serializeAttrs(c)),
-      outBindings: Array.from(a.children).filter(c=>/output|outbinding|result/i.test(c.localName)).map(c=>serializeAttrs(c)),
       raw: a
     }));
 
-    // Transitions (edges) — look for elements with source/target refs or names like transition/edge/link
-    const transitions = allElems.filter(n=>/transition|edge|link/i.test(n.localName) || (n.hasAttribute?.('from') && n.hasAttribute?.('to'))).map(t=>({
-      id: t.getAttribute('name') || t.getAttribute('id') || uuid('tr'),
-      from: t.getAttribute('from') || t.getAttribute('source') || t.getAttribute('start') || t.getAttribute('fromActivity') || '',
-      to: t.getAttribute('to') || t.getAttribute('target') || t.getAttribute('end') || t.getAttribute('toActivity') || '',
-      condition: t.getAttribute('condition') || t.getAttribute('expr') || '',
-      parentProcess: findAncestor(t,'process')?.getAttribute('name') || null,
-      raw: t
-    }));
+    // Transitions: simple heuristic
+    const transitions = [];
+    // 1) Sequence: connect direct children activities in order
+    for (const seq of byTag('sequence')){
+      const kids = Array.from(seq.children).filter(c=>activities.find(a=>a.raw===c));
+      for (let i=0;i<kids.length-1;i++){
+        const fromA = activities.find(a=>a.raw===kids[i]);
+        const toA   = activities.find(a=>a.raw===kids[i+1]);
+        if (fromA && toA){
+          transitions.push({ id: uuid('tr'), from: fromA.id, to: toA.id, condition: '', parentProcess: fromA.parentProcess, raw: seq });
+        }
+      }
+    }
+    // 2) Flow with links: map via sources/targets (best-effort)
+    for (const flow of byTag('flow')){
+      const linkDecls = Array.from(flow.getElementsByTagName('*')).filter(n=>local(n)==='link');
+      const linkNames = new Set(linkDecls.map(l=>l.getAttribute('name')).filter(Boolean));
+      if (!linkNames.size) continue;
+      const actsInFlow = activities.filter(a=>flow.contains(a.raw));
+      for (const act of actsInFlow){
+        const sources = Array.from(act.raw.getElementsByTagName('*')).filter(n=>local(n)==='source');
+        const targets = Array.from(act.raw.getElementsByTagName('*')).filter(n=>local(n)==='target');
+        for (const s of sources){
+          const ln = s.getAttribute('linkName');
+          if (!ln) continue;
+          // find activity that has a matching target linkName
+          const dest = actsInFlow.find(a=> Array.from(a.raw.getElementsByTagName('*')).some(n=>local(n)==='target' && n.getAttribute('linkName')===ln));
+          if (dest){ transitions.push({ id: uuid('tr'), from: act.id, to: dest.id, condition: '', parentProcess: act.parentProcess, raw: flow }); }
+        }
+      }
+    }
 
-    // Interfaces (partners/bindings) — very heuristic
-    const interfaces = byApproxNames(doc,['interface','partner','binding','endpoint','operation']).map(n=>({
+    // Interfaces/variables/faults (best‑effort)
+    const interfaces = all.filter(n=>['interface','partner','binding','endpoint','operation'].includes(local(n))).map(n=>({
       name: n.getAttribute('name') || n.localName,
       type: n.getAttribute('type') || n.localName,
       attrs: serializeAttrs(n)
     }));
 
-    const variables = byApproxNames(doc,['variable','param','property','global','shared']).map(n=>({
+    const variables = all.filter(n=>['variable','param','property','global','shared'].includes(local(n))).map(n=>({
       name: n.getAttribute('name') || n.localName,
       scope: findAncestor(n,'process')? 'process':'global',
       attrs: serializeAttrs(n)
     }));
 
-    const faults = byApproxNames(doc,['fault','catch','handler','onError']).map(n=>({
+    const faults = all.filter(n=>['fault','catch','handler','onerror'].includes(local(n))).map(n=>({
       name: n.getAttribute('name') || n.localName,
-      kind: n.localName,
+      kind: local(n),
       attrs: serializeAttrs(n)
     }));
 
     return { processes, activities, transitions, interfaces, variables, faults };
+
+    function findAncestor(node, localName){ let p=node.parentElement; while(p){ if ((p.localName||'').toLowerCase()===localName) return p; p=p.parentElement; } return null; }
+    function serializeAttrs(node){ const o={}; if (!node?.attributes) return o; for(const a of node.attributes){ o[a.name]=a.value; } return o; }
+  }
 
     function findAncestor(node, local){
       let p = node.parentElement; while(p){ if((p.localName||'').toLowerCase()===local) return p; p=p.parentElement; } return null;
@@ -392,7 +415,7 @@
     el('mermaidSrc').textContent = source;
     el('mermaid').innerHTML = source;
     // re-render
-    mermaid.run({querySelector:'#mermaid'});
+    try { if (window.mermaid) { mermaid.run({querySelector:'#mermaid'}); } } catch (e) { console.warn('Mermaid render skipped', e); }
   }
 
   function mermaidFlowFromModel(m){
