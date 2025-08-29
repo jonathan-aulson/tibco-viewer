@@ -1,17 +1,1 @@
-body {
-  font-family: system-ui, sans-serif;
-  margin: 2em;
-  background: #f8f8f8;
-}
 
-input[type="file"] {
-  margin: 1em 0;
-}
-
-pre {
-  background: #ffffff;
-  padding: 1em;
-  overflow-x: auto;
-  border: 1px solid #ccc;
-  border-radius: 5px;
-}
